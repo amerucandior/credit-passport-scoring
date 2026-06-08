@@ -4,13 +4,6 @@ downloader.py
 Downloads M-Pesa statement PDFs (or CSVs/Excel) from URLs,
 extracts the raw text, and passes it through the cleaning pipeline.
 
-Key fix from v1:
-  The original _parse_pdf returned a table-cell DataFrame (pdfplumber's
-  extract_tables output). But data_cleaning.extract_transactions() expects
-  the raw text of the PDF, not a table DataFrame.
-
-  This version extracts raw text and returns it alongside the structured
-  DataFrame so the caller can choose which representation to use.
 """
 
 import asyncio
@@ -72,16 +65,6 @@ def _parse_excel(content: bytes) -> pd.DataFrame:
 def _extract_pdf_text(content: bytes) -> str:
     """
     Extract the full text from all pages of an M-Pesa PDF.
-
-    Why raw text, not tables?
-    pdfplumber's extract_tables() works well for simple grids, but M-Pesa
-    statements have:
-      - Multi-line Details fields that table extraction breaks apart
-      - Page headers/footers between data rows
-      - Inconsistent column alignment
-
-    Raw text preserves line order. Our extract_transactions() parser then
-    handles the structure via the receipt-number pattern.
     """
     pages_text = []
     with pdfplumber.open(io.BytesIO(content)) as pdf:

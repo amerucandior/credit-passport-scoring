@@ -2,16 +2,10 @@
 feature_calculation.py
 ----------------------
 Computes credit-scoring features from a cleaned M-Pesa transaction DataFrame.
-
-Every feature is normalised to a per-month rate where applicable, so
-a 3-month statement and a 24-month statement produce comparable scores.
-
-Plain-language guide:
   - "Inflow" = money coming IN to the account
   - "Outflow" = money going OUT of the account
   - "Active day" = any day with at least one transaction
-  - "Fuliza" = M-Pesa's overdraft product — using it is not necessarily bad,
-               but high frequency + increasing amounts is a risk signal
+  - "Fuliza" = M-Pesa's overdraft product
   - "MMF" = Mobile Money Fund (like ZIIDI) — savings behaviour
 """
 
@@ -52,6 +46,10 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     # Ensure classification column exists
     # ----------------------------------------------------------------
     if "txn_type" not in df.columns:
+        if "details" not in df.columns:
+            raise KeyError(
+                "DataFrame must contain either 'txn_type' or 'details' column for transaction classification."
+            )
         df["txn_type"] = df["details"].apply(classify_transaction_type)
 
     # ----------------------------------------------------------------

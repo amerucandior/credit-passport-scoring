@@ -2,19 +2,10 @@
 data_cleaning.py
 ----------------
 Parses raw text extracted from an M-Pesa PDF statement into a clean DataFrame.
-
-Key fixes from v1:
-  - Page-break guard no longer hardcoded to "of 133"
-  - Multi-line transaction details are merged before parsing
-  - Transactions split into paid_in + withdrawn (not a single signed amount)
-  - Balance continuity check flags statement gaps
-  - Deduplication on receipt_no
-  - Reversal matching nullifies reversed transactions
 """
 
 import re
 import pandas as pd
-
 
 # ---------------------------------------------------------------------------
 # Step 1: Extract raw transaction rows from text
@@ -24,21 +15,6 @@ import pandas as pd
 def extract_transactions(raw_text: str) -> pd.DataFrame:
     """
     Convert the raw text of an M-Pesa PDF into a structured DataFrame.
-
-    What this function does (plain language):
-      1. Finds the line in the PDF text that says "Receipt No. Completion Time..."
-         — that is the column header row. Everything after it is transaction data.
-      2. Reads each line and stitches together multi-line Details fields.
-         (M-Pesa PDFs often break long Details across two lines.)
-      3. Parses each completed transaction row into 7 fields.
-      4. Returns a DataFrame — think of it as a clean spreadsheet.
-
-    Parameters:
-        raw_text: The full text of the PDF, extracted by pdfplumber.
-
-    Returns:
-        DataFrame with columns:
-        receipt_no, completion_time, details, status, paid_in, withdrawn, balance
     """
     lines = raw_text.split("\n")
     transactions = []
@@ -277,7 +253,6 @@ def extract_statement_metadata(raw_text: str) -> dict:
     if mobile_match:
         metadata["mobile_number"] = mobile_match.group(1).strip()
 
-    # "Statement Period: 20 May 2024 - 20 May 2026"
     period_match = re.search(
         r"Statement Period:\s*(\d{1,2} \w+ \d{4})\s*[-–]\s*(\d{1,2} \w+ \d{4})",
         raw_text,

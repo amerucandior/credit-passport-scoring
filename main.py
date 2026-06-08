@@ -4,6 +4,10 @@ from fastapi import FastAPI, Header, HTTPException
 
 from app.models import ScoreRequest, ScoreResponse
 from app.scorer import compute_score
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_KEY = os.getenv("SCORING_API_KEY")
 

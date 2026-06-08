@@ -11,6 +11,7 @@ dependencies = [
     "pandas>=3.0.3",
     "pdfplumber>=0.11.9",
     "pydantic>=2.13.4",
+    "pymupdf>=1.27.2.3",
     "pytest>=9.0.3",
     "python-dotenv>=1.2.2",
     "respx>=0.23.1",
