@@ -29,7 +29,7 @@ def extract_transactions(raw_text: str) -> pd.DataFrame:
     if start_idx is None:
         raise ValueError(
             "Could not find the transaction table header in this statement. "
-            "Check that the PDF was extracted correctly."
+            "Please check the text extraction layout."
         )
 
     # ---- Merge multi-line transaction rows ----
@@ -47,7 +47,9 @@ def extract_transactions(raw_text: str) -> pd.DataFrame:
         re.compile(r"^Customer Name:"),
         re.compile(r"^Receipt No\.\s+Completion Time"),
         re.compile(r"^For self-help dial"),
-        re.compile(r"^[A-Z0-9]{8}$"),
+        re.compile(r"^To verify"),
+        re.compile(r"^SUMMARY"),
+        re.compile(r"^DETAILED STATEMENT"),
     ]
 
     merged_lines = []
@@ -117,7 +119,7 @@ def _parse_transaction_line(line: str) -> dict | None:
     M-Pesa line structure (space-delimited):
       RECEIPT_NO  DATE  TIME  ...DETAILS...  STATUS  PAID_IN_OR_DASH  WITHDRAWN_OR_DASH  BALANCE
 
-    The tricky part: Details can be many words. We anchor on STATUS being
+    Details can be many words. We anchor on STATUS being
     one of: Completed / Pending / Failed / Reversed.
     """
     parts = line.split()
@@ -166,14 +168,22 @@ def _parse_transaction_line(line: str) -> dict | None:
         paid_in = parse_amount(remaining[0])
         withdrawn = parse_amount(remaining[1])
         balance = parse_amount(remaining[2])
+
     elif len(remaining) == 2:
         # Some rows show only the net amount + balance (older statement format)
         # Determine direction from sign or from paid_in/withdrawn context
         amount_str = remaining[0]
         balance = parse_amount(remaining[1])
-        raw_val = (
-            float(amount_str.replace(",", "")) if amount_str not in ("-", "") else 0.0
-        )
+
+        clean_amount_str = amount_str.replace(",", "").strip()
+        if clean_amount_str in ("-", "", "—"):
+            raw_val = 0.0
+        else:
+            try:
+                raw_val = float(clean_amount_str)
+            except ValueError:
+                raw_val = 0.0
+
         paid_in = raw_val if raw_val > 0 else 0.0
         withdrawn = abs(raw_val) if raw_val < 0 else 0.0
     else:
