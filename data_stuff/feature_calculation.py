@@ -13,7 +13,6 @@ import pandas as pd
 from .transaction_type import classify_transaction_type
 import re
 
-
 # ---------------------------------------------------------------------------
 # Main feature calculation function
 # ---------------------------------------------------------------------------
@@ -41,7 +40,6 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     # Never mutate the caller's DataFrame — always work on a copy
     # ----------------------------------------------------------------
     df = df.copy()
-
     # ----------------------------------------------------------------
     # Ensure classification column exists
     # ----------------------------------------------------------------
@@ -50,7 +48,7 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
             raise KeyError(
                 "DataFrame must contain either 'txn_type' or 'details' column for transaction classification."
             )
-        df["txn_type"] = df["details"].apply(classify_transaction_type)
+        df["txn_type"] = classify_transaction_type(df, details_col="details")
 
     # ----------------------------------------------------------------
     # Exclude transactions that should not count:
@@ -68,14 +66,13 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     # ----------------------------------------------------------------
     # Date column for day-level analysis
     # ----------------------------------------------------------------
-    df_active["date"] = pd.to_datetime(df_active["completion_time"]).dt.date
-    df_active["hour"] = pd.to_datetime(df_active["completion_time"]).dt.hour
-    df_active["day_of_week"] = pd.to_datetime(
-        df_active["completion_time"]
-    ).dt.dayofweek  # 0=Mon, 6=Sun
-    df_active["month_key"] = pd.to_datetime(df_active["completion_time"]).dt.to_period(
-        "M"
-    )
+    completion_dt = pd.to_datetime(df_active["completion_time"])
+
+    # Extract components instantly from the parsed cache
+    df_active["date"] = completion_dt.dt.date
+    df_active["hour"] = completion_dt.dt.hour
+    df_active["day_of_week"] = completion_dt.dt.dayofweek
+    df_active["month_key"] = completion_dt.dt.to_period("M")
 
     # ================================================================
     # BLOCK 1 — Inflow features
@@ -112,9 +109,7 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     total_outflow = outflow_df["withdrawn"].sum()
 
     monthly_outflow = (
-        outflow_df.groupby(
-            pd.to_datetime(outflow_df["completion_time"]).dt.to_period("M")
-        )["withdrawn"].sum()
+        outflow_df.groupby("month_key")["withdrawn"].sum()
         if not outflow_df.empty
         else pd.Series(dtype=float)
     )
@@ -130,8 +125,9 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     # BLOCK 3 — Utility payments
     # ================================================================
     utility_df = df_active[df_active["txn_type"].str.startswith("UTILITY_")]
+
     utility_count = len(utility_df)
-    utility_amount = utility_df["withdrawn"].sum()
+    utility_amount = utility_df["withdrawn"].sum() if not utility_df.empty else 0.0
 
     # What share of outflow went to utilities (higher = bill-paying priority)
     utility_payment_ratio = (
@@ -140,9 +136,7 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
 
     # Utility payment consistency: fraction of months that had at least one utility payment
     if statement_months > 0 and not utility_df.empty:
-        months_with_utility = utility_df.groupby(
-            pd.to_datetime(utility_df["completion_time"]).dt.to_period("M")
-        ).ngroups
+        months_with_utility = utility_df.groupby("month_key").ngroups
         utility_consistency = months_with_utility / statement_months
     else:
         utility_consistency = 0.0
@@ -160,8 +154,8 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     # Trend: is Fuliza usage increasing? Compare first half vs second half of statement.
     fuliza_escalating = False
     if fuliza_count >= 4:
-        mid = pd.to_datetime(df["completion_time"]).median()
-        fuliza_times = pd.to_datetime(fuliza_df["completion_time"])
+        mid = df["completion_time"].median()
+        fuliza_times = fuliza_df["completion_time"]
         first_half = (fuliza_times < mid).sum()
         second_half = (fuliza_times >= mid).sum()
         fuliza_escalating = bool(second_half > first_half)
@@ -210,11 +204,8 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
 
     # Average time between transactions (in hours)
     if len(df_active) > 1:
-        sorted_times = pd.to_datetime(df_active["completion_time"]).sort_values()
-        time_diffs_hours = sorted_times.diff().dropna().dt.total_seconds() / 3600
-        avg_hours_between_txns = (
-            time_diffs_hours.median()
-        )  # median is more robust than mean here
+        time_diffs_hours = df_active["completion_time"].diff().dropna().dt.total_seconds() / 3600
+        avg_hours_between_txns = time_diffs_hours.median()
     else:
         avg_hours_between_txns = 0.0
 
@@ -320,9 +311,9 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
         # Balance (None if statement has gaps)
         "avg_balance": round(avg_balance, 2) if avg_balance is not None else None,
         "min_balance": round(min_balance, 2) if min_balance is not None else None,
-        "balance_stddev": round(balance_stddev, 2)
-        if balance_stddev is not None
-        else None,
+        "balance_stddev": (
+            round(balance_stddev, 2) if balance_stddev is not None else None
+        ),
         # Quality flags
         "statement_has_gap": has_gap,
         "other_txn_ratio": round(other_txn_ratio, 4),
