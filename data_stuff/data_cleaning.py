@@ -22,7 +22,7 @@ def extract_transactions(raw_text: str) -> pd.DataFrame:
     # ---- Find where transactions start ----
     start_idx = None
     for i, line in enumerate(lines):
-        if "Receipt No." in line and "Completion Time" in line:
+        if "Receipt" in line and ("Time" in line or "Completion" in line):
             start_idx = i + 1
             break
 
@@ -45,6 +45,9 @@ def extract_transactions(raw_text: str) -> pd.DataFrame:
         re.compile(r"^TOTAL:"),
         re.compile(r"^M-PESA STATEMENT"),
         re.compile(r"^Customer Name:"),
+        re.compile(r"^Receipt No\.\s+Completion Time"),
+        re.compile(r"^For self-help dial"),
+        re.compile(r"^[A-Z0-9]{8}$"),
     ]
 
     merged_lines = []
@@ -197,22 +200,23 @@ def _check_balance_continuity(df: pd.DataFrame, tolerance: float = 1.0) -> pd.Da
     Verifies that each row's balance equals the previous balance minus
     withdrawn plus paid_in. Flags rows where this breaks.
 
-    Why this matters: a break means pages are missing from the statement,
-    or transactions were edited. You should not compute features like
-    'lowest balance' or 'average balance' on a statement with gaps.
-
     Adds two columns:
         balance_check_ok  — True if the balance is consistent with prev row
         statement_has_gap — True for ALL rows if any gap was detected
     """
     df = df.copy()
-    df["balance_check_ok"] = True
 
-    for i in range(1, len(df)):
-        expected = df.at[i - 1, "balance"] - df.at[i, "withdrawn"] + df.at[i, "paid_in"]
-        actual = df.at[i, "balance"]
-        if abs(expected - actual) > tolerance:
-            df.at[i, "balance_check_ok"] = False
+    # Grab the previous row's balance effortlessly
+    prev_balance = df["balance"].shift(1)
+
+    # Compute expected balance across the entire Series at once
+    expected_balance = prev_balance - df["withdrawn"] + df["paid_in"]
+
+    # Calculate absolute difference
+    diff = (expected_balance - df["balance"]).abs()
+
+    # Check if within tolerance (The first row will be NaN, so we default it to True)
+    df["balance_check_ok"] = (diff <= tolerance) | (df.index == 0)
 
     gap_count = (~df["balance_check_ok"]).sum()
     df["statement_has_gap"] = gap_count > 0

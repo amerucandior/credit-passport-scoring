@@ -1,4 +1,5 @@
-import re
+import numpy as np
+import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Known utility paybill codes
@@ -12,12 +13,9 @@ UTILITY_PAYBILLS = {
     "444700": "FAHARI_ELECTRICITY",
 }
 
-# ---------------------------------------------------------------------------
-# Known salary/employer paybill prefixes
-# ---------------------------------------------------------------------------
 BANK_PAYBILLS = {
     "247247": "EQUITY_BANK",
-    "522522": "SAFARICOM_MPESA",  # M-Pesa to bank
+    "522522": "SAFARICOM_MPESA",
     "329329": "STANCHART",
     "700200": "COOPERATIVE_BANK",
     "600100": "NCBA",
@@ -25,147 +23,166 @@ BANK_PAYBILLS = {
 }
 
 
-def classify_transaction_type(details: str) -> str:
+def classify_transaction_type(df: pd.DataFrame, details_col: str = "details") -> pd.Series:
     """
-    Classify a single transaction by its Details string.
-    Returns a string label. First match in priority order wins.
-
-    Priority rationale:
-      - Fuliza must come first: a Fuliza repayment also contains 'Merchant Payment'
-        and 'Pay Bill' substrings. If you check those first, Fuliza is misclassified.
-      - MMF must come before generic BILL_PAYMENT patterns.
-      - Specific paybill utilities before the catch-all BILL_PAYMENT_OTHER.
-      - REVERSAL before everything else so reversed transactions are never counted.
+    Vectorized classification of M-Pesa transaction details.
+    Returns a Series of string labels aligned with df's index.
     """
-    if not isinstance(details, str) or not details.strip():
-        return "OTHER"
-
-    d = details.strip()
+    d = df[details_col].fillna("")
 
     # ------------------------------------------------------------------
-    # 0. Reversals — must be first, they modify other transaction types
+    # Helper: case-insensitive contains, missing → False
     # ------------------------------------------------------------------
-    if re.search(r"Reversal|REVERSAL|Refund", d, re.IGNORECASE):
-        return "REVERSAL"
+    def has(pattern: str) -> pd.Series:
+        return d.str.contains(pattern, case=False, regex=True, na=False)
 
     # ------------------------------------------------------------------
-    # 1. Fuliza — CRITICAL credit signal. Must precede Merchant/PayBill.
-    #         sample: "Merchant Payment Fuliza M-Pesa to 6614845"
-    #                 "Pay Bill Fuliza M-Pesa to 247247"
+    # 0. Reversals
     # ------------------------------------------------------------------
-    if re.search(r"Fuliza", d, re.IGNORECASE):
-        if re.search(r"Pay Bill Fuliza|Merchant Payment Fuliza", d, re.IGNORECASE):
-            return "FULIZA_REPAYMENT"
-        return "FULIZA_OTHER"
+    is_reversal = has(r"Reversal|Refund")
 
     # ------------------------------------------------------------------
-    # 2. MMF (savings) — before generic Unit Trust / Bill patterns
-    #         sample: "Unit Trust Withdraw From 4145555 - ZIIDI MMF"
-    #                 "Unit Trust Invest To 4145555 - ZIIDI MMF"
+    # 1. Fuliza — must precede Merchant/PayBill
     # ------------------------------------------------------------------
-    if re.search(r"Unit Trust Withdraw", d, re.IGNORECASE):
-        return "MMF_WITHDRAWAL"
-    if re.search(r"Unit Trust (Invest To|Deposit)", d, re.IGNORECASE):
-        return "MMF_DEPOSIT"
+    is_fuliza_repayment = has(r"Pay Bill Fuliza|Merchant Payment Fuliza")
+    is_fuliza_other     = has(r"Fuliza")
 
     # ------------------------------------------------------------------
-    # 3. Utility payments — match paybill codes AND keyword variants
-    #    Handles: "Pay Bill Online to 888880", "Pay Bill to 888880"
+    # 2. MMF (savings)
     # ------------------------------------------------------------------
+    is_mmf_withdrawal = has(r"Unit Trust Withdraw")
+    is_mmf_deposit    = has(r"Unit Trust (?:Invest To|Deposit)")
+
+    # ------------------------------------------------------------------
+    # 3. Utility payments — one condition per known paybill code,
+    #    plus keyword fallback
+    # ------------------------------------------------------------------
+    utility_conditions = []
+    utility_choices    = []
     for code, name in UTILITY_PAYBILLS.items():
-        if re.search(rf"\b{code}\b", d):
-            return f"UTILITY_{name}"
-    # Keyword fallback for utilities not in the code list
-    if re.search(r"KPLC|Kenya Power|Nairobi Water|ZUKU|DSTV|Fahari", d, re.IGNORECASE):
-        return "UTILITY_PAYMENT"
+        utility_conditions.append(has(rf"\b{code}\b"))
+        utility_choices.append(f"UTILITY_{name}")
+    is_utility_keyword = has(r"KPLC|Kenya Power|Nairobi Water|ZUKU|DSTV|Fahari")
 
     # ------------------------------------------------------------------
-    # 4. Salary / bank credits — "Business Payment from <paybill>"
-    #    Your sample: "Business Payment from 501901 - KCB 1 via API"
+    # 4. Salary / bank credits
+    #    Resolved in two passes: known paybill first, generic fallback.
     # ------------------------------------------------------------------
-    if re.search(r"Business Payment from", d, re.IGNORECASE):
-        # Try to extract the paybill code to identify the employer
-        match = re.search(r"Business Payment from (\d+)", d)
-        if match:
-            code = match.group(1)
-            if code in BANK_PAYBILLS:
-                return f"BANK_CREDIT_{BANK_PAYBILLS[code]}"
-        return "SALARY_OR_BANK_CREDIT"
+    is_biz_payment = has(r"Business Payment from")
+
+    bank_conditions = []
+    bank_choices    = []
+    for code, name in BANK_PAYBILLS.items():
+        bank_conditions.append(is_biz_payment & has(rf"Business Payment from {code}"))
+        bank_choices.append(f"BANK_CREDIT_{name}")
+    is_salary_generic = is_biz_payment  # fallback when no code matched
 
     # ------------------------------------------------------------------
-    # 5. M-Shwari / KCB M-PESA (savings products)
+    # 5. M-Shwari / KCB M-PESA
     # ------------------------------------------------------------------
-    if re.search(r"M-Shwari (Withdraw|Lock)", d, re.IGNORECASE):
-        return "MSHWARI_WITHDRAWAL"
-    if re.search(r"M-Shwari (Deposit|In)", d, re.IGNORECASE):
-        return "MSHWARI_DEPOSIT"
-    if re.search(r"KCB M-PESA Withdraw", d, re.IGNORECASE):
-        return "KCB_MPESA_WITHDRAWAL"
-    if re.search(r"KCB M-PESA Deposit", d, re.IGNORECASE):
-        return "KCB_MPESA_DEPOSIT"
+    is_mshwari_withdrawal  = has(r"M-Shwari (?:Withdraw|Lock)")
+    is_mshwari_deposit     = has(r"M-Shwari (?:Deposit|In)")
+    is_kcb_withdrawal      = has(r"KCB M-PESA Withdraw")
+    is_kcb_deposit         = has(r"KCB M-PESA Deposit")
 
     # ------------------------------------------------------------------
-    # 6. Airtime and data bundles
+    # 6. Airtime & data bundles
     # ------------------------------------------------------------------
-    if re.search(
-        r"Customer Bundle Purchase|Bundle Purchase|DATA BUNDLES", d, re.IGNORECASE
-    ):
-        return "BUNDLE_PURCHASE"
-    if re.search(r"Airtime (Purchase|for)", d, re.IGNORECASE):
-        return "AIRTIME_PURCHASE"
+    is_bundle  = has(r"Customer Bundle Purchase|Bundle Purchase|DATA BUNDLES")
+    is_airtime = has(r"Airtime (?:Purchase|for)")
 
     # ------------------------------------------------------------------
-    # 7. P2P sent — two variants in M-Pesa
-    #    "Customer Transfer to - 07******194 MUNYAO MWONGELA"  (send money)
-    #    "Customer Payment to Small Business to - 07******479"  (till-less)
+    # 7. P2P sent
     # ------------------------------------------------------------------
-    if re.search(r"Customer Transfer to", d, re.IGNORECASE):
-        return "P2P_SENT"
-    if re.search(
-        r"Customer Payment to Small Business.*?(07\*{4,}|2547\*{4,})", d, re.IGNORECASE
-    ):
-        return "P2P_SENT"
+    is_p2p_sent = (
+        has(r"Customer Transfer to")
+        | (has(r"Customer Payment to Small Business") & has(r"07\*{4,}|2547\*{4,}"))
+    )
 
     # ------------------------------------------------------------------
     # 8. P2P received
-    #    "Funds received from - 2547******073 FRANKLINE JAMLICK"
     # ------------------------------------------------------------------
-    if re.search(r"Funds received from|Received Money", d, re.IGNORECASE):
-        return "P2P_RECEIVED"
+    is_p2p_received = has(r"Funds received from|Received Money")
 
     # ------------------------------------------------------------------
-    # 9. Merchant / Buy Goods (till numbers — typically 5–7 digits)
-    #    "Merchant Payment to 3566421 - GOLDENMART VENTURES"
-    #    "Customer Payment to Small Business to - 07... MILCAH KAMAU"
-    #    NOTE: Small Business WITHOUT a masked number is a merchant till
+    # 9. Merchant / Buy Goods
     # ------------------------------------------------------------------
-    if re.search(r"Merchant Payment to\s+\d{4,7}", d, re.IGNORECASE):
-        return "MERCHANT_PAYMENT"
-    if re.search(r"Customer Payment to Small Business", d, re.IGNORECASE):
-        return "MERCHANT_PAYMENT"
+    is_merchant = (
+        has(r"Merchant Payment to\s+\d{4,7}")
+        | has(r"Customer Payment to Small Business")
+    )
 
     # ------------------------------------------------------------------
-    # 10. Paybill — general (not caught by utilities above)
+    # 10. Paybill — general
     # ------------------------------------------------------------------
-    if re.search(r"Pay Bill (Online )?to|Lipa na M-PESA.*Paybill", d, re.IGNORECASE):
-        return "BILL_PAYMENT_OTHER"
+    is_bill_other = has(r"Pay Bill (?:Online )?to|Lipa na M-PESA.*Paybill")
 
     # ------------------------------------------------------------------
-    # 11. Agent cash transactions
+    # 11. Agent cash
     # ------------------------------------------------------------------
-    if re.search(r"Withdraw Cash|Agent Withdrawal|Teller Withdrawal", d, re.IGNORECASE):
-        return "AGENT_WITHDRAWAL"
-    if re.search(r"Deposited by Agent|M-Pesa Deposit|Agent Deposit", d, re.IGNORECASE):
-        return "AGENT_DEPOSIT"
+    is_agent_withdrawal = has(r"Withdraw Cash|Agent Withdrawal|Teller Withdrawal")
+    is_agent_deposit    = has(r"Deposited by Agent|M-Pesa Deposit|Agent Deposit")
 
     # ------------------------------------------------------------------
-    # 12. Transaction charges
+    # 12. Transaction fees
     # ------------------------------------------------------------------
-    if re.search(
-        r"(Transfer of Funds Charge|Pay Bill Charge|Transaction Cost|Withdraw Charge)",
-        d,
-        re.IGNORECASE,
-    ):
-        return "TRANSACTION_FEE"
+    is_fee = has(r"Transfer of Funds Charge|Pay Bill Charge|Transaction Cost|Withdraw Charge")
 
-    return "OTHER"
+    # ------------------------------------------------------------------
+    # Assemble conditions + choices in strict priority order
+    # ------------------------------------------------------------------
+    conditions = [
+        is_reversal,
+        is_fuliza_repayment,
+        is_fuliza_other,
+        is_mmf_withdrawal,
+        is_mmf_deposit,
+        *utility_conditions,        # one entry per known paybill code
+        is_utility_keyword,
+        *bank_conditions,           # one entry per known bank paybill
+        is_salary_generic,
+        is_mshwari_withdrawal,
+        is_mshwari_deposit,
+        is_kcb_withdrawal,
+        is_kcb_deposit,
+        is_bundle,
+        is_airtime,
+        is_p2p_sent,
+        is_p2p_received,
+        is_merchant,
+        is_bill_other,
+        is_agent_withdrawal,
+        is_agent_deposit,
+        is_fee,
+    ]
+
+    choices = [
+        "REVERSAL",
+        "FULIZA_REPAYMENT",
+        "FULIZA_OTHER",
+        "MMF_WITHDRAWAL",
+        "MMF_DEPOSIT",
+        *utility_choices,
+        "UTILITY_PAYMENT",
+        *bank_choices,
+        "SALARY_OR_BANK_CREDIT",
+        "MSHWARI_WITHDRAWAL",
+        "MSHWARI_DEPOSIT",
+        "KCB_MPESA_WITHDRAWAL",
+        "KCB_MPESA_DEPOSIT",
+        "BUNDLE_PURCHASE",
+        "AIRTIME_PURCHASE",
+        "P2P_SENT",
+        "P2P_RECEIVED",
+        "MERCHANT_PAYMENT",
+        "BILL_PAYMENT_OTHER",
+        "AGENT_WITHDRAWAL",
+        "AGENT_DEPOSIT",
+        "TRANSACTION_FEE",
+    ]
+
+    return pd.Series(
+        np.select(conditions, choices, default="OTHER"),
+        index=df.index,
+        name="txn_type",
+    )

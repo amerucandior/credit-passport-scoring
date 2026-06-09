@@ -72,7 +72,10 @@ def _extract_pdf_text(content: bytes) -> str:
             text = page.extract_text(x_tolerance=3, y_tolerance=3)
             if text:
                 pages_text.append(text)
-    return "\n".join(pages_text)
+                
+    fulltext = "\n".join(pages_text)
+        
+    return fulltext
 
 
 # ---------------------------------------------------------------------------
