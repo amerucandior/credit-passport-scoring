@@ -3,10 +3,6 @@ models.py
 ---------
 Pydantic data models for the Credit Passport Scoring API.
 
-Key addition from v1:
-  ScoreResponse now includes a full ImprovementReport so callers get
-  actionable advice alongside the raw score — not just a number.
-
 Structure overview:
   ScoreRequest          — what the caller sends (identity + statements)
   ScoreResponse         — what we return:
