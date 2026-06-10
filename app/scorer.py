@@ -16,14 +16,8 @@ Everything else stays the same.
 import logging
 
 from app.models import ScoreRequest
-
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
-
-from operations.download_statements import _fetch_statement_features
 from operations.build_features import _build_feature_set
+from operations.download_statements import _fetch_statement_features
 from operations.rule_based_scoring import score_from_features
 
 logger = logging.getLogger(__name__)
@@ -69,7 +63,7 @@ def compute_score(req: ScoreRequest) -> dict:
 
 def _serialise_improvement(improvement: dict) -> dict:
     """
-    Convert the improvement report into a JSON-serialisable dict that
+    Convert the improvement report into a JSON-serializable dict that
     Pydantic's ScoreResponse.improvement (ImprovementReport) can validate.
     """
     serialised_pillars = {}

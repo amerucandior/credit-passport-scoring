@@ -9,9 +9,11 @@ Computes credit-scoring features from a cleaned M-Pesa transaction DataFrame.
   - "MMF" = Mobile Money Fund (like ZIIDI) — savings behaviour
 """
 
-import pandas as pd
-from .transaction_type import classify_transaction_type
 import re
+
+import pandas as pd
+
+from .transaction_type import classify_transaction_type
 
 # ---------------------------------------------------------------------------
 # Main feature calculation function
@@ -204,7 +206,9 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
 
     # Average time between transactions (in hours)
     if len(df_active) > 1:
-        time_diffs_hours = df_active["completion_time"].diff().dropna().dt.total_seconds() / 3600
+        time_diffs_hours = (
+            df_active["completion_time"].diff().dropna().dt.total_seconds() / 3600
+        )
         avg_hours_between_txns = time_diffs_hours.median()
     else:
         avg_hours_between_txns = 0.0
@@ -219,13 +223,12 @@ def calculate_customer_features(df: pd.DataFrame, customer_id: str = None) -> di
     # BLOCK 8 — Seasonality / time-of-day features
     # ================================================================
     weekend_txns = df_active[df_active["day_of_week"] >= 5]  # Saturday=5, Sunday=6
-    weekday_txns = df_active[df_active["day_of_week"] < 5]
 
     weekend_txn_ratio = (
         len(weekend_txns) / len(df_active) if len(df_active) > 0 else 0.0
     )
 
-    # Night-time transactions (10pm–5am) — cash flow pressure indicator
+    # Nighttime transactions (10pm–5am) — cash flow pressure indicator
     night_txns = df_active[
         df_active["hour"].between(22, 24) | df_active["hour"].between(0, 5)
     ]

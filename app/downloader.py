@@ -73,10 +73,7 @@ def _extract_pdf_text(content: bytes) -> str:
             if text:
                 pages_text.append(text)
                 
-    fulltext = "\n".join(pages_text)
-        
-    return fulltext
-
+    return "\n".join(pages_text)
 
 # ---------------------------------------------------------------------------
 # Top-level parse + clean + feature extraction
